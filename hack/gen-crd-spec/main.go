@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,10 +13,11 @@ import (
 	unstructuredutil "github.com/argoproj/argo-rollouts/utils/unstructured"
 
 	"github.com/blang/semver"
-	"github.com/ghodss/yaml"
 	extensionsobj "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	kubeopenapiutil "k8s.io/kube-openapi/pkg/util"
 	spec "k8s.io/kube-openapi/pkg/validation/spec"
+	"sigs.k8s.io/yaml"
 )
 
 const metadataValidation = `properties:
@@ -112,12 +113,6 @@ func NewCustomResourceDefinition() []*extensionsobj.CustomResourceDefinition {
 		removeK8S118Fields(obj)
 		createMetadataValidation(obj)
 		crd := toCRD(obj)
-
-		if crd.Name == "clusteranalysistemplates.argoproj.io" {
-			crd.Spec.Scope = "Cluster"
-		} else {
-			crd.Spec.Scope = "Namespaced"
-		}
 		crds = append(crds, crd)
 	}
 
@@ -298,7 +293,7 @@ func loadK8SDefinitions() (spec.Definitions, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, err := ioutil.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -398,9 +393,6 @@ func generateKustomizeSchema(crds []*extensionsobj.CustomResourceDefinition, out
 
 	definitions := map[string]interface{}{}
 	for _, crd := range crds {
-		if crd.Spec.Names.Kind != "Rollout" {
-			continue
-		}
 		var version string
 		var props map[string]extensionsobj.JSONSchemaProps
 		for _, v := range crd.Spec.Versions {
@@ -434,7 +426,8 @@ func generateKustomizeSchema(crds []*extensionsobj.CustomResourceDefinition, out
 			}
 		}
 
-		definitions[fmt.Sprintf("%s.%s", version, crd.Spec.Names.Kind)] = map[string]interface{}{
+		definitionName := kubeopenapiutil.ToRESTFriendlyName(fmt.Sprintf("%s/%s.%s", crd.Spec.Group, version, crd.Spec.Names.Kind))
+		definitions[definitionName] = map[string]interface{}{
 			"properties": propsMap,
 			"x-kubernetes-group-version-kind": []map[string]string{{
 				"group":   crd.Spec.Group,
@@ -449,7 +442,7 @@ func generateKustomizeSchema(crds []*extensionsobj.CustomResourceDefinition, out
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(outputPath, data, 0644)
+	return os.WriteFile(outputPath, data, 0644)
 }
 
 // Generate CRD spec for Rollout Resource
@@ -487,7 +480,7 @@ func main() {
 		if path == "" {
 			panic(fmt.Sprintf("unknown kind: %s", crdKind))
 		}
-		err = ioutil.WriteFile(path, yamlBytes, 0644)
+		err = os.WriteFile(path, yamlBytes, 0644)
 		checkErr(err)
 	}
 }

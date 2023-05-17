@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,7 +12,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/ghodss/yaml"
+	a6util "github.com/argoproj/argo-rollouts/utils/apisix"
+
 	smiv1alpha1 "github.com/servicemeshinterface/smi-sdk-go/pkg/apis/split/v1alpha1"
 	smiclientset "github.com/servicemeshinterface/smi-sdk-go/pkg/gen/client/split/clientset/versioned"
 	"github.com/sirupsen/logrus"
@@ -30,6 +30,7 @@ import (
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/yaml"
 
 	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	rov1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
@@ -48,7 +49,6 @@ import (
 //nolint:structcheck
 type Common struct {
 	Context        context.Context
-	testInstanceID string
 	t              *testing.T
 	namespace      string
 	log            *log.Entry
@@ -206,7 +206,7 @@ func (c *Common) MarkPodsReady(revision string, quantity int) int {
 				}
 				time.Sleep(500 * time.Millisecond)
 			}
-			//c.log.Infof("Conditions: %v", pod.Status.Conditions)
+			// c.log.Infof("Conditions: %v", pod.Status.Conditions)
 			marked += 1
 		}
 	}
@@ -445,7 +445,7 @@ func (c *Common) yamlBytes(text string) []byte {
 	var err error
 	if strings.HasPrefix(text, "@") {
 		file := strings.TrimPrefix(text, "@")
-		yamlBytes, err = ioutil.ReadFile(file)
+		yamlBytes, err = os.ReadFile(file)
 		c.CheckError(err)
 	} else {
 		yamlBytes = []byte(text)
@@ -570,6 +570,31 @@ func (c *Common) GetVirtualService() *istio.VirtualService {
 	err = runtime.DefaultUnstructuredConverter.FromUnstructured(vsvcUn.Object, &vsvc)
 	c.CheckError(err)
 	return &vsvc
+}
+
+func (c *Common) GetApisixRoute() *unstructured.Unstructured {
+	ro := c.Rollout()
+	ctx := context.TODO()
+	dyClient := a6util.NewDynamicClient(c.dynamicClient, c.namespace)
+	name := ro.Spec.Strategy.Canary.TrafficRouting.Apisix.Route.Name
+	a6Route, err := dyClient.Get(ctx, name, metav1.GetOptions{})
+	c.CheckError(err)
+	return a6Route
+}
+
+func (c *Common) GetApisixSetHeaderRoute() *unstructured.Unstructured {
+	ctx := context.TODO()
+	rollout, err := c.rolloutClient.ArgoprojV1alpha1().Rollouts(c.Rollout().GetNamespace()).Get(ctx, c.Rollout().GetName(), metav1.GetOptions{})
+	c.CheckError(err)
+	dyClient := a6util.NewDynamicClient(c.dynamicClient, c.Rollout().GetNamespace())
+	index := *rollout.Status.CurrentStepIndex
+	if step := rollout.Spec.Strategy.Canary.Steps[index]; step.SetHeaderRoute != nil {
+		name := step.SetHeaderRoute.Name
+		a6Route, err := dyClient.Get(ctx, name, metav1.GetOptions{})
+		c.CheckError(err)
+		return a6Route
+	}
+	return nil
 }
 
 func (c *Common) GetAppMeshVirtualRouter() *unstructured.Unstructured {

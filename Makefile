@@ -16,13 +16,14 @@ VERSION=$(shell if [ ! -z "${GIT_TAG}" ] ; then echo "${GIT_TAG}" | sed -e "s/^v
 DOCKER_PUSH=false
 IMAGE_TAG=latest
 # build development images
-DEV_IMAGE=false
+DEV_IMAGE ?= false
 
 # E2E variables
 E2E_INSTANCE_ID ?= argo-rollouts-e2e
 E2E_TEST_OPTIONS ?= 
-E2E_PARALLEL ?= 4
-E2E_WAIT_TIMEOUT ?= 90
+E2E_PARALLEL ?= 1
+E2E_WAIT_TIMEOUT ?= 120
+GOPATH ?= $(shell go env GOPATH)
 
 override LDFLAGS += \
   -X ${PACKAGE}/utils/version.version=${VERSION} \
@@ -79,9 +80,13 @@ install-go-tools-local: go-mod-vendor
 install-protoc-local:
 	./hack/installers/install-protoc.sh
 
+.PHONY: install-devtools-local
+install-devtools-local:
+	./hack/installers/install-dev-tools.sh
+
 # Installs all tools required to build and test locally
 .PHONY: install-tools-local
-install-tools-local: install-go-tools-local install-protoc-local
+install-tools-local: install-go-tools-local install-protoc-local install-devtools-local
 
 TYPES := $(shell find pkg/apis/rollouts/v1alpha1 -type f -name '*.go' -not -name openapi_generated.go -not -name '*generated*' -not -name '*test.go')
 APIMACHINERY_PKGS=k8s.io/apimachinery/pkg/util/intstr,+k8s.io/apimachinery/pkg/api/resource,+k8s.io/apimachinery/pkg/runtime/schema,+k8s.io/apimachinery/pkg/runtime,k8s.io/apimachinery/pkg/apis/meta/v1,k8s.io/api/core/v1,k8s.io/api/batch/v1
@@ -91,7 +96,7 @@ install-toolchain: install-go-tools-local install-protoc-local
 
 # generates all auto-generated code
 .PHONY: codegen
-codegen: go-mod-vendor gen-proto gen-k8scodegen gen-openapi gen-mocks gen-crd manifests
+codegen: go-mod-vendor gen-proto gen-k8scodegen gen-openapi gen-mocks gen-crd manifests docs
 
 # generates all files related to proto files
 .PHONY: gen-proto
@@ -107,6 +112,8 @@ k8s-proto: go-mod-vendor $(TYPES)
 		--proto-import $(CURDIR)/vendor \
 		--proto-import=${DIST_DIR}/protoc-include
 	touch pkg/apis/rollouts/v1alpha1/generated.proto
+	cp -R ${GOPATH}/src/github.com/argoproj/argo-rollouts/pkg . | true
+
 
 # generates *.pb.go, *.pb.gw.go, swagger from .proto files
 .PHONY: api-proto
@@ -115,6 +122,7 @@ api-proto: go-mod-vendor k8s-proto
 
 # generates ui related proto files
 .PHONY: ui-proto
+ui-proto:
 	yarn --cwd ui run protogen
 
 # generates k8s client, informer, lister, deepcopy from types.go
@@ -143,12 +151,12 @@ gen-openapi: $(DIST_DIR)/openapi-gen
 
 .PHONY: controller
 controller:
-	CGO_ENABLED=0 go build -v -i -ldflags '${LDFLAGS}' -o ${DIST_DIR}/rollouts-controller ./cmd/rollouts-controller
+	CGO_ENABLED=0 go build -v -ldflags '${LDFLAGS}' -o ${DIST_DIR}/rollouts-controller ./cmd/rollouts-controller
 
 .PHONY: plugin
 plugin: ui/dist
 	cp -r ui/dist/app/* server/static
-	CGO_ENABLED=0 go build -v -i -ldflags '${LDFLAGS}' -o ${DIST_DIR}/${PLUGIN_CLI_NAME} ./cmd/kubectl-argo-rollouts
+	CGO_ENABLED=0 go build -v -ldflags '${LDFLAGS}' -o ${DIST_DIR}/${PLUGIN_CLI_NAME} ./cmd/kubectl-argo-rollouts
 
 ui/dist:
 	yarn --cwd ui install
@@ -157,18 +165,19 @@ ui/dist:
 .PHONY: plugin-linux
 plugin-linux: ui/dist
 	cp -r ui/dist/app/* server/static
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -i -ldflags '${LDFLAGS}' -o ${DIST_DIR}/${PLUGIN_CLI_NAME}-linux-amd64 ./cmd/kubectl-argo-rollouts
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -v -i -ldflags '${LDFLAGS}' -o ${DIST_DIR}/${PLUGIN_CLI_NAME}-linux-arm64 ./cmd/kubectl-argo-rollouts
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -ldflags '${LDFLAGS}' -o ${DIST_DIR}/${PLUGIN_CLI_NAME}-linux-amd64 ./cmd/kubectl-argo-rollouts
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -v -ldflags '${LDFLAGS}' -o ${DIST_DIR}/${PLUGIN_CLI_NAME}-linux-arm64 ./cmd/kubectl-argo-rollouts
 
 .PHONY: plugin-darwin
 plugin-darwin: ui/dist
 	cp -r ui/dist/app/* server/static
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -v -i -ldflags '${LDFLAGS}' -o ${DIST_DIR}/${PLUGIN_CLI_NAME}-darwin-amd64 ./cmd/kubectl-argo-rollouts
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -v -ldflags '${LDFLAGS}' -o ${DIST_DIR}/${PLUGIN_CLI_NAME}-darwin-amd64 ./cmd/kubectl-argo-rollouts
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -v -ldflags '${LDFLAGS}' -o ${DIST_DIR}/${PLUGIN_CLI_NAME}-darwin-arm64 ./cmd/kubectl-argo-rollouts
 
 .PHONY: plugin-windows
 plugin-windows: ui/dist
 	cp -r ui/dist/app/* server/static
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -v -i -ldflags '${LDFLAGS}' -o ${DIST_DIR}/${PLUGIN_CLI_NAME}-windows-amd64 ./cmd/kubectl-argo-rollouts
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -v -ldflags '${LDFLAGS}' -o ${DIST_DIR}/${PLUGIN_CLI_NAME}-windows-amd64 ./cmd/kubectl-argo-rollouts
 
 .PHONY: docs
 docs:
@@ -182,7 +191,7 @@ builder-image:
 .PHONY: image
 image:
 ifeq ($(DEV_IMAGE), true)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -i -ldflags '${LDFLAGS}' -o ${DIST_DIR}/rollouts-controller-linux-amd64 ./cmd/rollouts-controller
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -v -ldflags '${LDFLAGS}' -o ${DIST_DIR}/rollouts-controller-linux-amd64 ./cmd/rollouts-controller
 	DOCKER_BUILDKIT=1 docker build -t $(IMAGE_PREFIX)argo-rollouts:$(IMAGE_TAG) -f Dockerfile.dev ${DIST_DIR}
 else
 	DOCKER_BUILDKIT=1 docker build -t $(IMAGE_PREFIX)argo-rollouts:$(IMAGE_TAG)  .
@@ -200,7 +209,7 @@ lint: go-mod-vendor
 
 .PHONY: test
 test: test-kustomize
-	go test -covermode=count -coverprofile=coverage.out ${TEST_TARGET}
+	@make test-unit
 
 .PHONY: test-kustomize
 test-kustomize:
@@ -211,8 +220,13 @@ start-e2e:
 	go run ./cmd/rollouts-controller/main.go --instance-id ${E2E_INSTANCE_ID} --loglevel debug --kloglevel 6
 
 .PHONY: test-e2e
-test-e2e:
-	go test -timeout 30m -v -count 1 --tags e2e -p ${E2E_PARALLEL} --short ./test/e2e ${E2E_TEST_OPTIONS}
+test-e2e: install-devtools-local
+	${DIST_DIR}/gotestsum --rerun-fails-report=rerunreport.txt --junitfile=junit.xml --format=testname --packages="./test/e2e" --rerun-fails=5 -- -timeout 60m -count 1 --tags e2e -p ${E2E_PARALLEL} -parallel ${E2E_PARALLEL} -v --short ./test/e2e ${E2E_TEST_OPTIONS}
+
+.PHONY: test-unit
+ test-unit: install-devtools-local
+	${DIST_DIR}/gotestsum --junitfile=junit.xml --format=testname -- -covermode=count -coverprofile=coverage.out `go list ./... | grep -v ./test/cmd/metrics-plugin-sample`
+
 
 .PHONY: coverage
 coverage: test
@@ -261,3 +275,18 @@ release: release-precheck precheckin image plugin-image release-plugins
 trivy:
 	@trivy fs --clear-cache
 	@trivy fs .
+
+.PHONY: checksums
+checksums:
+	shasum -a 256 ./dist/kubectl-argo-rollouts-* | awk -F './dist/' '{print $$1 $$2}' > ./dist/argo-rollouts-checksums.txt
+
+# Build sample plugin with debug info
+# https://www.jetbrains.com/help/go/attach-to-running-go-processes-with-debugger.html
+.PHONY: build-sample-metric-plugin-debug
+build-sample-metric-plugin-debug:
+	go build -gcflags="all=-N -l" -o metric-plugin test/cmd/metrics-plugin-sample/main.go
+
+.PHONY: build-sample-traffic-plugin-debug
+build-sample-traffic-plugin-debug:
+	go build -gcflags="all=-N -l" -o traffic-plugin test/cmd/trafficrouter-plugin-sample/main.go
+

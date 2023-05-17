@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghodss/yaml"
 	"github.com/stretchr/testify/assert"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -19,6 +18,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/utils/pointer"
+	"sigs.k8s.io/yaml"
 
 	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	"github.com/argoproj/argo-rollouts/utils/annotations"
@@ -1335,4 +1335,43 @@ func TestIsReplicaSetAvailable(t *testing.T) {
 		}
 		assert.False(t, IsReplicaSetAvailable(&rs))
 	}
+}
+
+func TestIsReplicaSetPartiallyAvailable(t *testing.T) {
+	t.Run("No Availability", func(t *testing.T) {
+		rs := appsv1.ReplicaSet{
+			Spec: appsv1.ReplicaSetSpec{
+				Replicas: pointer.Int32Ptr(2),
+			},
+			Status: appsv1.ReplicaSetStatus{
+				ReadyReplicas:     0,
+				AvailableReplicas: 0,
+			},
+		}
+		assert.False(t, IsReplicaSetPartiallyAvailable(&rs))
+	})
+	t.Run("Partial Availability", func(t *testing.T) {
+		rs := appsv1.ReplicaSet{
+			Spec: appsv1.ReplicaSetSpec{
+				Replicas: pointer.Int32Ptr(2),
+			},
+			Status: appsv1.ReplicaSetStatus{
+				ReadyReplicas:     2,
+				AvailableReplicas: 1,
+			},
+		}
+		assert.True(t, IsReplicaSetPartiallyAvailable(&rs))
+	})
+	t.Run("Full Availability", func(t *testing.T) {
+		rs := appsv1.ReplicaSet{
+			Spec: appsv1.ReplicaSetSpec{
+				Replicas: pointer.Int32Ptr(2),
+			},
+			Status: appsv1.ReplicaSetStatus{
+				ReadyReplicas:     2,
+				AvailableReplicas: 2,
+			},
+		}
+		assert.True(t, IsReplicaSetPartiallyAvailable(&rs))
+	})
 }

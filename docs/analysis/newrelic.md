@@ -3,7 +3,7 @@
 !!! important
     Available since v0.10.0
 
-A [New Relic](https://newrelic.com/) query using [NRQL](https://docs.newrelic.com/docs/query-your-data/nrql-new-relic-query-language/get-started/introduction-nrql-new-relics-query-language) can be used to obtain measurements for analysis.  
+A [New Relic](https://newrelic.com/) query using [NRQL](https://docs.newrelic.com/docs/query-your-data/nrql-new-relic-query-language/get-started/introduction-nrql-new-relics-query-language) can be used to obtain measurements for analysis.
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -33,7 +33,7 @@ kind: Secret
 metadata:
   name: newrelic
 type: Opaque
-data:
+stringData:
   personal-api-key: <newrelic-personal-api-key>
   account-id: <newrelic-account-id>
   region: "us" # optional, defaults to "us" if not set. Only set to "eu" if you use EU New Relic
@@ -47,7 +47,7 @@ kind: Secret
 metadata:
   name: newrelic
 type: Opaque
-data:
+stringData:
   personal-api-key: <newrelic-personal-api-key>
   account-id: <newrelic-account-id>
   region: "us" # optional, defaults to "us" if not set. Only set to "eu" if you use EU New Relic

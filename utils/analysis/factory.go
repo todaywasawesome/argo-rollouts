@@ -219,6 +219,19 @@ func ValidateMetric(metric v1alpha1.Metric) error {
 	if metric.Provider.CloudWatch != nil {
 		numProviders++
 	}
+	if metric.Provider.Graphite != nil {
+		numProviders++
+	}
+	if metric.Provider.Influxdb != nil {
+		numProviders++
+	}
+	if metric.Provider.SkyWalking != nil {
+		numProviders++
+	}
+	if metric.Provider.Plugin != nil && len(metric.Provider.Plugin) > 0 {
+		// We allow exactly one plugin to be specified per analysis run template
+		numProviders = numProviders + len(metric.Provider.Plugin)
+	}
 	if numProviders == 0 {
 		return fmt.Errorf("no provider specified")
 	}

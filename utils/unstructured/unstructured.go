@@ -3,10 +3,10 @@ package unstructured
 import (
 	"regexp"
 
-	"github.com/ghodss/yaml"
 	log "github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/yaml"
 
 	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	logutil "github.com/argoproj/argo-rollouts/utils/log"
@@ -65,6 +65,24 @@ func ObjectToAnalysisRun(obj interface{}) *v1alpha1.AnalysisRun {
 		log.Warn("Object is neither a rollout or unstructured")
 	}
 	return ar
+}
+
+func ObjectToExperiment(obj interface{}) *v1alpha1.Experiment {
+	un, ok := obj.(*unstructured.Unstructured)
+	if ok {
+		var ex v1alpha1.Experiment
+		err := runtime.DefaultUnstructuredConverter.FromUnstructured(un.Object, &ex)
+		if err != nil {
+			log.Warnf("Failed to convert Experiment from Unstructured object: %v", err)
+			return nil
+		}
+		return &ex
+	}
+	ex, ok := obj.(*v1alpha1.Experiment)
+	if !ok {
+		log.Warn("Object is neither a rollout or unstructured")
+	}
+	return ex
 }
 
 var diffSeparator = regexp.MustCompile(`\n---`)

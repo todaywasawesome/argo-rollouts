@@ -9,10 +9,11 @@ cmd/**/debug
 debug.test
 coverage.out
 coverage.html
+junit.xml
+rerunreport.txt
 site/
 vendor/
-# generated
-docs/generated
+plugin-bin/
 # static
 server/static/*
 !server/static/.gitkeep

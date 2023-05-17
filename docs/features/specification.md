@@ -78,6 +78,12 @@ spec:
   # than or equal to this value.
   restartAt: "2020-03-30T21:19:35Z"
 
+  # The rollback window provides a way to fast track deployments to
+  # previously deployed versions.
+  # Optional, and by default is not set.
+  rollbackWindow:
+    revisions: 3
+
   strategy:
 
     # Blue-green update strategy
@@ -206,6 +212,11 @@ spec:
       # traffic routing.
       scaleDownDelaySeconds: 30
 
+      # The minimum number of pods that will be requested for each ReplicaSet
+      # when using traffic routed canary. This is to ensure high availability
+      # of each ReplicaSet. Defaults to 1. +optional
+      minPodsPerReplicaSet: 2
+
       # Limits the number of old RS that can run at one time before getting
       # scaled down. Defaults to nil
       scaleDownDelayRevisionLimit: 2
@@ -264,6 +275,57 @@ spec:
       - setCanaryScale:
           matchTrafficWeight: true
 
+      # Sets header based route with specified header values
+      # Setting header based route will send all 100 traffic to the canary for the requests 
+      # O with a specified header, in this case request header "version":"2"
+      # (supported only with trafficRouting, for Istio only at the moment)
+      - setHeaderRoute:
+          # Name of the route that will be created by argo rollouts this must also be configured
+          # in spec.strategy.canary.trafficRouting.managedRoutes
+          name: "header-route-1"
+          # The matching rules for the header route, if this is missing it acts as a removal of the route.
+          match:
+              # headerName The name of the header to apply the match rules to.
+            - headerName: "version"
+              # headerValue must contain exactly one field of exact, regex, or prefix. Not all traffic routers support 
+              # all types
+              headerValue:
+                # Exact will only match if the header value is exactly the same
+                exact: "2"
+                # Will match the rule if the regular expression matches
+                regex: "2.0.(.*)"
+                # prefix will be a prefix match of the header value
+                prefix: "2.0"
+                
+        # Sets up a mirror/shadow based route with the specified match rules
+        # The traffic will be mirrored at the configured percentage to the canary service
+        # during the rollout
+        # (supported only with trafficRouting, for Istio only at the moment)
+      - setMirrorRoute:
+          # Name of the route that will be created by argo rollouts this must also be configured
+          # in spec.strategy.canary.trafficRouting.managedRoutes
+          name: "header-route-1"
+          # The percentage of the matched traffic to mirror to the canary
+          percentage: 100
+          # The matching rules for the header route, if this is missing it acts as a removal of the route.
+          # All conditions inside a single match block have AND semantics, while the list of match blocks have OR semantics.
+          # Each type within a match (method, path, headers) must have one and only one match type (exact, regex, prefix)
+          # Not all match types (exact, regex, prefix) will be supported by all traffic routers.
+          match:
+            - method: # What HTTP method to match
+                exact: "GET"
+                regex: "P.*"
+                prefix: "POST"
+              path: # What HTTP url paths to match.
+                exact: "/test"
+                regex: "/test/.*"
+                prefix: "/"
+              headers:
+                agent-1b: # What HTTP header name to use in the match.
+                  exact: "firefox"
+                  regex: "firefox2(.*)"
+                  prefix: "firefox"
+
       # an inline analysis step
       - analysis:
           templates:
@@ -275,11 +337,23 @@ spec:
           templates:
           - name: baseline
             specRef: stable
+            # optional, creates a service for the experiment if set
+            service:
+              # optional, service: {} is also acceptable if name is not included
+              name: test-service
           - name: canary
             specRef: canary
+            # optional, set the weight of traffic routed to this version
+            weight: 10
           analyses:
           - name : mann-whitney
             templateName: mann-whitney
+            # Metadata which will be attached to the AnalysisRun.
+            analysisRunMetadata:
+              labels:
+                app.service.io/analysisType: smoke-test
+              annotations:
+                link.argocd.argoproj.io/external-link: http://my-loggin-platform.com/pre-generated-link
 
       # Anti-affinity configuration between desired and previous ReplicaSet.
       # Only one must be specified.
@@ -293,7 +367,14 @@ spec:
       # will achieve traffic split via a weighted replica counts between
       # the canary and stable ReplicaSet.
       trafficRouting:
-
+        # This is a list of routes that Argo Rollouts has the rights to manage it is currently only required for
+        # setMirrorRoute and setHeaderRoute. The order of managedRoutes array also sets the precedence of the route
+        # in the traffic router. Argo Rollouts will place these routes in the order specified above any routes already
+        # defined in the used traffic router if something exists. The names here must match the names from the 
+        # setHeaderRoute and setMirrorRoute steps.
+        managedRoutes:
+          - name: set-header
+          - name: mirror-route
         # Istio traffic routing configuration
         istio:
           # Either virtualService or virtualServices can be configured.
@@ -312,7 +393,12 @@ spec:
 
         # NGINX Ingress Controller routing configuration
         nginx:
-          stableIngress: primary-ingress  # required
+          # Either stableIngress or stableIngresses must be configured, but not both.
+          stableIngress: primary-ingress
+          stableIngresses:
+            - primary-ingress
+            - secondary-ingress
+            - tertiary-ingress
           annotationPrefix: customingress.nginx.ingress.kubernetes.io # optional
           additionalIngressAnnotations:   # optional
             canary-by-header: X-Canary

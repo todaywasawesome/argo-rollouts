@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
@@ -101,7 +102,9 @@ func albActionAnnotation(stable string) string {
 }
 
 func ingress(name, stableSvc, canarySvc, actionService string, port, weight int32, managedBy string, includeStickyConfig bool) *extensionsv1beta1.Ingress {
-	managedByValue := fmt.Sprintf("%s:%s", managedBy, albActionAnnotation(actionService))
+	managedByValue := ingressutil.ManagedALBAnnotations{
+		managedBy: ingressutil.ManagedALBAnnotation{albActionAnnotation(actionService)},
+	}
 	action := fmt.Sprintf(actionTemplate, canarySvc, port, weight, stableSvc, port, 100-weight)
 	if includeStickyConfig {
 		action = fmt.Sprintf(actionTemplateWithStickyConfig, canarySvc, port, weight, stableSvc, port, 100-weight)
@@ -117,8 +120,8 @@ func ingress(name, stableSvc, canarySvc, actionService string, port, weight int3
 			Name:      name,
 			Namespace: metav1.NamespaceDefault,
 			Annotations: map[string]string{
-				albActionAnnotation(actionService):   string(jsonutil.MustMarshal(a)),
-				ingressutil.ManagedActionsAnnotation: managedByValue,
+				albActionAnnotation(actionService): string(jsonutil.MustMarshal(a)),
+				ingressutil.ManagedAnnotations:     managedByValue.String(),
 			},
 		},
 		Spec: extensionsv1beta1.IngressSpec{
@@ -154,6 +157,13 @@ func TestType(t *testing.T) {
 	})
 	assert.Equal(t, Type, r.Type())
 	assert.NoError(t, err)
+}
+
+func TestAddManagedAnnotation(t *testing.T) {
+	annotations, _ := modifyManagedAnnotation(map[string]string{}, "argo-rollouts", true, "alb.ingress.kubernetes.io/actions.action1", "alb.ingress.kubernetes.io/conditions.action1")
+	assert.Equal(t, annotations[ingressutil.ManagedAnnotations], "{\"argo-rollouts\":[\"alb.ingress.kubernetes.io/actions.action1\",\"alb.ingress.kubernetes.io/conditions.action1\"]}")
+	_, err := modifyManagedAnnotation(map[string]string{ingressutil.ManagedAnnotations: "invalid, non-json value"}, "some-rollout", false)
+	assert.Error(t, err)
 }
 
 func TestIngressNotFound(t *testing.T) {
@@ -225,7 +235,7 @@ func TestNoChanges(t *testing.T) {
 func TestErrorOnInvalidManagedBy(t *testing.T) {
 	ro := fakeRollout(STABLE_SVC, CANARY_SVC, nil, "ingress", 443)
 	i := ingress("ingress", STABLE_SVC, CANARY_SVC, STABLE_SVC, 443, 5, ro.Name, false)
-	i.Annotations[ingressutil.ManagedActionsAnnotation] = "test"
+	i.Annotations[ingressutil.ManagedAnnotations] = "test"
 	client := fake.NewSimpleClientset(i)
 	k8sI := kubeinformers.NewSharedInformerFactory(client, 0)
 	k8sI.Extensions().V1beta1().Ingresses().Informer().GetIndexer().Add(i)
@@ -444,18 +454,33 @@ func (f *fakeAWSClient) GetTargetGroupHealth(ctx context.Context, targetGroupARN
 }
 
 func (f *fakeAWSClient) getAlbStatus() *v1alpha1.ALBStatus {
+	LoadBalancerFullName := ""
+	if lbArnParts := strings.Split(*f.loadBalancer.LoadBalancerArn, "/"); len(lbArnParts) > 2 {
+		LoadBalancerFullName = strings.Join(lbArnParts[2:], "/")
+	}
+	CanaryTargetGroupFullName := ""
+	if tgArnParts := strings.Split(*f.targetGroups[0].TargetGroupArn, "/"); len(tgArnParts) > 1 {
+		CanaryTargetGroupFullName = strings.Join(tgArnParts[1:], "/")
+	}
+	StableTargetGroupFullName := ""
+	if tgArnParts := strings.Split(*f.targetGroups[len(f.targetGroups)-1].TargetGroupArn, "/"); len(tgArnParts) > 1 {
+		StableTargetGroupFullName = strings.Join(tgArnParts[1:], "/")
+	}
 	return &v1alpha1.ALBStatus{
 		LoadBalancer: v1alpha1.AwsResourceRef{
-			Name: *f.loadBalancer.LoadBalancerName,
-			ARN:  *f.loadBalancer.LoadBalancerArn,
+			Name:     *f.loadBalancer.LoadBalancerName,
+			ARN:      *f.loadBalancer.LoadBalancerArn,
+			FullName: LoadBalancerFullName,
 		},
 		CanaryTargetGroup: v1alpha1.AwsResourceRef{
-			Name: *f.targetGroups[0].TargetGroupName,
-			ARN:  *f.targetGroups[0].TargetGroupArn,
+			Name:     *f.targetGroups[0].TargetGroupName,
+			ARN:      *f.targetGroups[0].TargetGroupArn,
+			FullName: CanaryTargetGroupFullName,
 		},
 		StableTargetGroup: v1alpha1.AwsResourceRef{
-			Name: *f.targetGroups[len(f.targetGroups)-1].TargetGroupName,
-			ARN:  *f.targetGroups[len(f.targetGroups)-1].TargetGroupArn,
+			Name:     *f.targetGroups[len(f.targetGroups)-1].TargetGroupName,
+			ARN:      *f.targetGroups[len(f.targetGroups)-1].TargetGroupArn,
+			FullName: StableTargetGroupFullName,
 		},
 	}
 }
@@ -463,6 +488,10 @@ func (f *fakeAWSClient) getAlbStatus() *v1alpha1.ALBStatus {
 func TestVerifyWeight(t *testing.T) {
 	newFakeReconciler := func(status *v1alpha1.RolloutStatus) (*Reconciler, *fakeAWSClient) {
 		ro := fakeRollout(STABLE_SVC, CANARY_SVC, nil, "ingress", 443)
+		ro.Status.StableRS = "a45fe23"
+		ro.Spec.Strategy.Canary.Steps = []v1alpha1.CanaryStep{{
+			SetWeight: pointer.Int32Ptr(10),
+		}}
 		i := ingress("ingress", STABLE_SVC, CANARY_SVC, STABLE_SVC, 443, 5, ro.Name, false)
 		i.Status.LoadBalancer = corev1.LoadBalancerStatus{
 			Ingress: []corev1.LoadBalancerIngress{
@@ -503,20 +532,43 @@ func TestVerifyWeight(t *testing.T) {
 		assert.False(t, *weightVerified)
 	}
 
+	// VeryifyWeight not needed
+	{
+		var status v1alpha1.RolloutStatus
+		r, _ := newFakeReconciler(&status)
+		status.StableRS = ""
+		r.cfg.Rollout.Status.StableRS = ""
+		weightVerified, err := r.VerifyWeight(10)
+		assert.NoError(t, err)
+		assert.False(t, *weightVerified)
+	}
+
+	// VeryifyWeight that we do not need to verify weight and status.ALB is already set
+	{
+		var status v1alpha1.RolloutStatus
+		r, _ := newFakeReconciler(&status)
+		r.cfg.Rollout.Status.ALB = &v1alpha1.ALBStatus{}
+		r.cfg.Rollout.Status.CurrentStepIndex = nil
+		r.cfg.Rollout.Spec.Strategy.Canary.Steps = nil
+		weightVerified, err := r.VerifyWeight(10)
+		assert.NoError(t, err)
+		assert.Nil(t, weightVerified)
+	}
+
 	// LoadBalancer found, not at weight
 	{
 		var status v1alpha1.RolloutStatus
 		r, fakeClient := newFakeReconciler(&status)
 		fakeClient.loadBalancer = &elbv2types.LoadBalancer{
 			LoadBalancerName: pointer.StringPtr("lb-abc123-name"),
-			LoadBalancerArn:  pointer.StringPtr("lb-abc123-arn"),
+			LoadBalancerArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:loadbalancer/app/lb-abc123-name/1234567890123456"),
 			DNSName:          pointer.StringPtr("verify-weight-test-abc-123.us-west-2.elb.amazonaws.com"),
 		}
 		fakeClient.targetGroups = []aws.TargetGroupMeta{
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("canary-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("canary-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/canary-tg-abc123-name/1234567890123456"),
 				},
 				Weight: pointer.Int32Ptr(11),
 				Tags: map[string]string{
@@ -526,7 +578,7 @@ func TestVerifyWeight(t *testing.T) {
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("stable-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("stable-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/stable-tg-abc123-name/1234567890123456"),
 				},
 				Weight: pointer.Int32Ptr(89),
 				Tags: map[string]string{
@@ -542,6 +594,44 @@ func TestVerifyWeight(t *testing.T) {
 	}
 
 	// LoadBalancer found, at weight
+	{
+		var status v1alpha1.RolloutStatus
+		r, fakeClient := newFakeReconciler(&status)
+		fakeClient.loadBalancer = &elbv2types.LoadBalancer{
+			LoadBalancerName: pointer.StringPtr("lb-abc123-name"),
+			LoadBalancerArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:loadbalancer/app/lb-abc123-name/1234567890123456"),
+			DNSName:          pointer.StringPtr("verify-weight-test-abc-123.us-west-2.elb.amazonaws.com"),
+		}
+		fakeClient.targetGroups = []aws.TargetGroupMeta{
+			{
+				TargetGroup: elbv2types.TargetGroup{
+					TargetGroupName: pointer.StringPtr("canary-tg-abc123-name"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/canary-tg-abc123-name/1234567890123456"),
+				},
+				Weight: pointer.Int32Ptr(10),
+				Tags: map[string]string{
+					aws.AWSLoadBalancerV2TagKeyResourceID: "default/ingress-canary-svc:443",
+				},
+			},
+			{
+				TargetGroup: elbv2types.TargetGroup{
+					TargetGroupName: pointer.StringPtr("stable-tg-abc123-name"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/stable-tg-abc123-name/1234567890123456"),
+				},
+				Weight: pointer.Int32Ptr(11),
+				Tags: map[string]string{
+					aws.AWSLoadBalancerV2TagKeyResourceID: "default/ingress-stable-svc:443",
+				},
+			},
+		}
+
+		weightVerified, err := r.VerifyWeight(10)
+		assert.NoError(t, err)
+		assert.True(t, *weightVerified)
+		assert.Equal(t, *status.ALB, *fakeClient.getAlbStatus())
+	}
+
+	// LoadBalancer found, but ARNs are unparsable
 	{
 		var status v1alpha1.RolloutStatus
 		r, fakeClient := newFakeReconciler(&status)
@@ -576,7 +666,10 @@ func TestVerifyWeight(t *testing.T) {
 		weightVerified, err := r.VerifyWeight(10)
 		assert.NoError(t, err)
 		assert.True(t, *weightVerified)
-		assert.Equal(t, *status.ALB, *fakeClient.getAlbStatus())
+		albStatus := *fakeClient.getAlbStatus()
+		assert.Equal(t, albStatus.LoadBalancer.FullName, "")
+		assert.Equal(t, albStatus.CanaryTargetGroup.FullName, "")
+		assert.Equal(t, albStatus.StableTargetGroup.FullName, "")
 	}
 }
 
@@ -642,6 +735,10 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 	}
 	newFakeReconciler := func(status *v1alpha1.RolloutStatus) (*Reconciler, *fakeAWSClient) {
 		ro := fakeRollout(STABLE_SVC, CANARY_SVC, nil, "ingress", 443)
+		ro.Status.StableRS = "a45fe23"
+		ro.Spec.Strategy.Canary.Steps = []v1alpha1.CanaryStep{{
+			SetWeight: pointer.Int32Ptr(10),
+		}}
 		i := ingress("ingress", STABLE_SVC, CANARY_SVC, STABLE_SVC, 443, 0, ro.Name, false)
 		i.Annotations["alb.ingress.kubernetes.io/actions.stable-svc"] = fmt.Sprintf(actionTemplateWithExperiments, CANARY_SVC, 443, 10, weightDestinations[0].ServiceName, 443, weightDestinations[0].Weight, weightDestinations[1].ServiceName, 443, weightDestinations[1].Weight, STABLE_SVC, 443, 85)
 
@@ -681,14 +778,14 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 		r, fakeClient := newFakeReconciler(&status)
 		fakeClient.loadBalancer = &elbv2types.LoadBalancer{
 			LoadBalancerName: pointer.StringPtr("lb-abc123-name"),
-			LoadBalancerArn:  pointer.StringPtr("lb-abc123-arn"),
+			LoadBalancerArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:loadbalancer/app/lb-abc123-name/1234567890123456"),
 			DNSName:          pointer.StringPtr("verify-weight-test-abc-123.us-west-2.elb.amazonaws.com"),
 		}
 		fakeClient.targetGroups = []aws.TargetGroupMeta{
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("canary-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("canary-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/canary-tg-abc123-name/1234567890123456"),
 				},
 				Weight: pointer.Int32Ptr(10),
 				Tags: map[string]string{
@@ -698,7 +795,7 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("stable-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("stable-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/stable-tg-abc123-name/1234567890123456"),
 				},
 				Weight: pointer.Int32Ptr(90),
 				Tags: map[string]string{
@@ -719,14 +816,14 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 		r, fakeClient := newFakeReconciler(&status)
 		fakeClient.loadBalancer = &elbv2types.LoadBalancer{
 			LoadBalancerName: pointer.StringPtr("lb-abc123-name"),
-			LoadBalancerArn:  pointer.StringPtr("lb-abc123-arn"),
+			LoadBalancerArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:loadbalancer/app/lb-abc123-name/1234567890123456"),
 			DNSName:          pointer.StringPtr("verify-weight-test-abc-123.us-west-2.elb.amazonaws.com"),
 		}
 		fakeClient.targetGroups = []aws.TargetGroupMeta{
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("canary-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("canary-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/canary-tg-abc123-name/1234567890123456"),
 				},
 				Weight: pointer.Int32Ptr(10),
 				Tags: map[string]string{
@@ -736,7 +833,7 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("ex-svc-1-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("ex-svc-1-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/ex-svc-1-tg-abc123-name/1234567890123456"),
 				},
 				Weight: pointer.Int32Ptr(100),
 				Tags: map[string]string{
@@ -746,7 +843,7 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("ex-svc-2-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("ex-svc-2-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/ex-svc-2-tg-abc123-name/1234567890123456"),
 				},
 				Weight: pointer.Int32Ptr(100),
 				Tags: map[string]string{
@@ -756,7 +853,7 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("stable-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("stable-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/stable-tg-abc123-name/1234567890123456"),
 				},
 				Weight: pointer.Int32Ptr(85),
 				Tags: map[string]string{
@@ -777,14 +874,14 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 		r, fakeClient := newFakeReconciler(&status)
 		fakeClient.loadBalancer = &elbv2types.LoadBalancer{
 			LoadBalancerName: pointer.StringPtr("lb-abc123-name"),
-			LoadBalancerArn:  pointer.StringPtr("lb-abc123-arn"),
+			LoadBalancerArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:loadbalancer/app/lb-abc123-name/1234567890123456"),
 			DNSName:          pointer.StringPtr("verify-weight-test-abc-123.us-west-2.elb.amazonaws.com"),
 		}
 		fakeClient.targetGroups = []aws.TargetGroupMeta{
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("canary-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("canary-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/canary-tg-abc123-name/1234567890123456"),
 				},
 				Weight: pointer.Int32Ptr(10),
 				Tags: map[string]string{
@@ -794,7 +891,7 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("ex-svc-1-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("ex-svc-1-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/ex-svc-1-tg-abc123-name/1234567890123456"),
 				},
 				Weight: &weightDestinations[0].Weight,
 				Tags: map[string]string{
@@ -804,7 +901,7 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("ex-svc-2-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("ex-svc-2-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/ex-svc-2-tg-abc123-name/1234567890123456"),
 				},
 				Weight: &weightDestinations[1].Weight,
 				Tags: map[string]string{
@@ -814,7 +911,7 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 			{
 				TargetGroup: elbv2types.TargetGroup{
 					TargetGroupName: pointer.StringPtr("stable-tg-abc123-name"),
-					TargetGroupArn:  pointer.StringPtr("stable-tg-abc123-arn"),
+					TargetGroupArn:  pointer.StringPtr("arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/stable-tg-abc123-name/1234567890123456"),
 				},
 				Weight: pointer.Int32Ptr(85),
 				Tags: map[string]string{
@@ -828,4 +925,148 @@ func TestVerifyWeightWithAdditionalDestinations(t *testing.T) {
 		assert.True(t, *weightVerified)
 		assert.Equal(t, *status.ALB, *fakeClient.getAlbStatus())
 	}
+}
+
+func TestSetHeaderRoute(t *testing.T) {
+	ro := fakeRollout(STABLE_SVC, CANARY_SVC, nil, "ingress", 443)
+	ro.Spec.Strategy.Canary.TrafficRouting.ManagedRoutes = []v1alpha1.MangedRoutes{
+		{Name: "header-route"},
+	}
+	i := ingress("ingress", STABLE_SVC, CANARY_SVC, "action1", 443, 10, ro.Name, false)
+	client := fake.NewSimpleClientset(i)
+	k8sI := kubeinformers.NewSharedInformerFactory(client, 0)
+	k8sI.Extensions().V1beta1().Ingresses().Informer().GetIndexer().Add(i)
+	ingressWrapper, err := ingressutil.NewIngressWrapper(ingressutil.IngressModeExtensions, client, k8sI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewReconciler(ReconcilerConfig{
+		Rollout:        ro,
+		Client:         client,
+		Recorder:       record.NewFakeEventRecorder(),
+		ControllerKind: schema.GroupVersionKind{Group: "foo", Version: "v1", Kind: "Bar"},
+		IngressWrapper: ingressWrapper,
+	})
+	assert.NoError(t, err)
+	err = r.SetHeaderRoute(&v1alpha1.SetHeaderRoute{
+		Name: "header-route",
+		Match: []v1alpha1.HeaderRoutingMatch{{
+			HeaderName: "Agent",
+			HeaderValue: &v1alpha1.StringMatch{
+				Prefix: "Chrome",
+			},
+		}},
+	})
+	assert.Nil(t, err)
+	assert.Len(t, client.Actions(), 1)
+
+	// no managed routes, no changes expected
+	err = r.RemoveManagedRoutes()
+	assert.Nil(t, err)
+	assert.Len(t, client.Actions(), 1)
+}
+
+func TestRemoveManagedRoutes(t *testing.T) {
+	ro := fakeRollout(STABLE_SVC, CANARY_SVC, nil, "ingress", 443)
+	ro.Spec.Strategy.Canary.TrafficRouting.ManagedRoutes = []v1alpha1.MangedRoutes{
+		{Name: "header-route"},
+	}
+	i := ingress("ingress", STABLE_SVC, CANARY_SVC, "action1", 443, 10, ro.Name, false)
+	managedByValue := ingressutil.ManagedALBAnnotations{
+		ro.Name: ingressutil.ManagedALBAnnotation{
+			"alb.ingress.kubernetes.io/actions.action1",
+			"alb.ingress.kubernetes.io/actions.header-route",
+			"alb.ingress.kubernetes.io/conditions.header-route",
+		},
+	}
+	i.Annotations["alb.ingress.kubernetes.io/actions.header-route"] = "{}"
+	i.Annotations["alb.ingress.kubernetes.io/conditions.header-route"] = "{}"
+	i.Annotations[ingressutil.ManagedAnnotations] = managedByValue.String()
+	i.Spec.Rules = []extensionsv1beta1.IngressRule{
+		{
+			IngressRuleValue: extensionsv1beta1.IngressRuleValue{
+				HTTP: &extensionsv1beta1.HTTPIngressRuleValue{
+					Paths: []extensionsv1beta1.HTTPIngressPath{
+						{
+							Backend: extensionsv1beta1.IngressBackend{
+								ServiceName: "action1",
+								ServicePort: intstr.Parse("use-annotation"),
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			IngressRuleValue: extensionsv1beta1.IngressRuleValue{
+				HTTP: &extensionsv1beta1.HTTPIngressRuleValue{
+					Paths: []extensionsv1beta1.HTTPIngressPath{
+						{
+							Backend: extensionsv1beta1.IngressBackend{
+								ServiceName: "header-route",
+								ServicePort: intstr.Parse("use-annotation"),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	client := fake.NewSimpleClientset(i)
+	k8sI := kubeinformers.NewSharedInformerFactory(client, 0)
+	k8sI.Extensions().V1beta1().Ingresses().Informer().GetIndexer().Add(i)
+	ingressWrapper, err := ingressutil.NewIngressWrapper(ingressutil.IngressModeExtensions, client, k8sI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewReconciler(ReconcilerConfig{
+		Rollout:        ro,
+		Client:         client,
+		Recorder:       record.NewFakeEventRecorder(),
+		ControllerKind: schema.GroupVersionKind{Group: "foo", Version: "v1", Kind: "Bar"},
+		IngressWrapper: ingressWrapper,
+	})
+	assert.NoError(t, err)
+
+	err = r.SetHeaderRoute(&v1alpha1.SetHeaderRoute{
+		Name: "header-route",
+	})
+	assert.Nil(t, err)
+	assert.Len(t, client.Actions(), 1)
+
+	err = r.RemoveManagedRoutes()
+	assert.Nil(t, err)
+	assert.Len(t, client.Actions(), 2)
+}
+
+func TestSetMirrorRoute(t *testing.T) {
+	ro := fakeRollout(STABLE_SVC, CANARY_SVC, nil, "ingress", 443)
+	i := ingress("ingress", STABLE_SVC, CANARY_SVC, STABLE_SVC, 443, 10, ro.Name, false)
+	client := fake.NewSimpleClientset()
+	k8sI := kubeinformers.NewSharedInformerFactory(client, 0)
+	k8sI.Extensions().V1beta1().Ingresses().Informer().GetIndexer().Add(i)
+	ingressWrapper, err := ingressutil.NewIngressWrapper(ingressutil.IngressModeExtensions, client, k8sI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewReconciler(ReconcilerConfig{
+		Rollout:        ro,
+		Client:         client,
+		Recorder:       record.NewFakeEventRecorder(),
+		ControllerKind: schema.GroupVersionKind{Group: "foo", Version: "v1", Kind: "Bar"},
+		IngressWrapper: ingressWrapper,
+	})
+	assert.NoError(t, err)
+	err = r.SetMirrorRoute(&v1alpha1.SetMirrorRoute{
+		Name: "mirror-route",
+		Match: []v1alpha1.RouteMatch{{
+			Method: &v1alpha1.StringMatch{Exact: "GET"},
+		}},
+	})
+	assert.Nil(t, err)
+	err = r.RemoveManagedRoutes()
+	assert.Nil(t, err)
+
+	assert.Len(t, client.Actions(), 0)
 }

@@ -61,8 +61,8 @@ func TestGetRolloutIngressKeysForCanaryWithTrafficRouting(t *testing.T) {
 	assert.ElementsMatch(t, keys, []string{"default/stable-ingress", "default/myrollout-stable-ingress-canary", "default/alb-ingress"})
 }
 
-func TestGetCanaryIngressName(t *testing.T) {
-	rollout := &v1alpha1.Rollout{
+func TestGetRolloutIngressKeysForCanaryWithTrafficRoutingMultiIngress(t *testing.T) {
+	keys := GetRolloutIngressKeys(&v1alpha1.Rollout{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "myrollout",
 			Namespace: "default",
@@ -74,7 +74,33 @@ func TestGetCanaryIngressName(t *testing.T) {
 					StableService: "stable-service",
 					TrafficRouting: &v1alpha1.RolloutTrafficRouting{
 						Nginx: &v1alpha1.NginxTrafficRouting{
-							StableIngress: "stable-ingress",
+							StableIngresses: []string{"stable-ingress", "stable-ingress-additional"},
+						},
+						ALB: &v1alpha1.ALBTrafficRouting{
+							Ingress: "alb-ingress",
+						},
+					},
+				},
+			},
+		},
+	})
+	assert.ElementsMatch(t, keys, []string{"default/stable-ingress", "default/myrollout-stable-ingress-canary", "default/stable-ingress-additional", "default/myrollout-stable-ingress-additional-canary", "default/alb-ingress"})
+}
+
+func TestGetCanaryIngressName(t *testing.T) {
+	singleIngressRollout := &v1alpha1.Rollout{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "myrollout",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.RolloutSpec{
+			Strategy: v1alpha1.RolloutStrategy{
+				Canary: &v1alpha1.CanaryStrategy{
+					CanaryService: "canary-service",
+					StableService: "stable-service",
+					TrafficRouting: &v1alpha1.RolloutTrafficRouting{
+						Nginx: &v1alpha1.NginxTrafficRouting{
+							StableIngresses: []string{"stable-ingress", "stable-ingress-additional"},
 						},
 					},
 				},
@@ -82,20 +108,54 @@ func TestGetCanaryIngressName(t *testing.T) {
 		},
 	}
 
-	t.Run("NoTrim", func(t *testing.T) {
-		rollout.Spec.Strategy.Canary.TrafficRouting.Nginx.StableIngress = "stable-ingress"
-		canaryIngress := GetCanaryIngressName(rollout)
+	multiIngressRollout := &v1alpha1.Rollout{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "myrollout",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.RolloutSpec{
+			Strategy: v1alpha1.RolloutStrategy{
+				Canary: &v1alpha1.CanaryStrategy{
+					CanaryService: "canary-service",
+					StableService: "stable-service",
+					TrafficRouting: &v1alpha1.RolloutTrafficRouting{
+						Nginx: &v1alpha1.NginxTrafficRouting{
+							StableIngresses: []string{"stable-ingress", "stable-ingress-additional"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	t.Run("StableIngress - NoTrim", func(t *testing.T) {
+		singleIngressRollout.Spec.Strategy.Canary.TrafficRouting.Nginx.StableIngress = "stable-ingress"
+		canaryIngress := GetCanaryIngressName(singleIngressRollout.GetName(), singleIngressRollout.Spec.Strategy.Canary.TrafficRouting.Nginx.StableIngress)
 		assert.Equal(t, "myrollout-stable-ingress-canary", canaryIngress)
 	})
-	t.Run("Trim", func(t *testing.T) {
-		rollout.Spec.Strategy.Canary.TrafficRouting.Nginx.StableIngress = fmt.Sprintf("stable-ingress%s", strings.Repeat("a", 260))
-		canaryIngress := GetCanaryIngressName(rollout)
+	t.Run("StableIngress - Trim", func(t *testing.T) {
+		singleIngressRollout.Spec.Strategy.Canary.TrafficRouting.Nginx.StableIngress = fmt.Sprintf("stable-ingress%s", strings.Repeat("a", 260))
+		canaryIngress := GetCanaryIngressName(singleIngressRollout.GetName(), singleIngressRollout.Spec.Strategy.Canary.TrafficRouting.Nginx.StableIngress)
 		assert.Equal(t, 253, len(canaryIngress), "canary ingress truncated to 253")
 		assert.Equal(t, true, strings.HasSuffix(canaryIngress, "-canary"), "canary ingress has -canary suffix")
 	})
+	t.Run("StableIngresses - NoTrim", func(t *testing.T) {
+		for _, ing := range multiIngressRollout.Spec.Strategy.Canary.TrafficRouting.Nginx.StableIngresses {
+			canaryIngress := GetCanaryIngressName(multiIngressRollout.GetName(), ing)
+			assert.Equal(t, fmt.Sprintf("%s-%s-canary", multiIngressRollout.ObjectMeta.Name, ing), canaryIngress)
+		}
+	})
+	t.Run("StableIngresses - Trim", func(t *testing.T) {
+		multiIngressRollout.Spec.Strategy.Canary.TrafficRouting.Nginx.StableIngresses = []string{fmt.Sprintf("stable-ingress%s", strings.Repeat("a", 260))}
+		for _, ing := range multiIngressRollout.Spec.Strategy.Canary.TrafficRouting.Nginx.StableIngresses {
+			canaryIngress := GetCanaryIngressName(multiIngressRollout.GetName(), ing)
+			assert.Equal(t, 253, len(canaryIngress), "canary ingress truncated to 253")
+			assert.Equal(t, true, strings.HasSuffix(canaryIngress, "-canary"), "canary ingress has -canary suffix")
+		}
+	})
 	t.Run("NoStableIngress", func(t *testing.T) {
-		rollout.Spec.Strategy.Canary.TrafficRouting.Nginx = nil
-		canaryIngress := GetCanaryIngressName(rollout)
+		multiIngressRollout.Spec.Strategy.Canary.TrafficRouting.Nginx = nil
+		canaryIngress := GetCanaryIngressName(multiIngressRollout.GetName(), "")
 		assert.Equal(t, "", canaryIngress, "canary ingress is empty")
 	})
 }
@@ -513,4 +573,56 @@ func getExtensionsIngress() *extensionsv1beta1.Ingress {
 			},
 		},
 	}
+}
+
+func TestManagedALBAnnotations(t *testing.T) {
+	emptyJson, _ := NewManagedALBAnnotations("")
+	assert.NotNil(t, emptyJson)
+	assert.Equal(t, 0, len(emptyJson))
+	assert.Equal(t, "{}", emptyJson.String())
+
+	_, err := NewManagedALBAnnotations("invalid json")
+	assert.Error(t, err)
+
+	json := "{\"rollouts-demo\":[\"alb.ingress.kubernetes.io/actions.action1\", \"alb.ingress.kubernetes.io/actions.header-action\", \"alb.ingress.kubernetes.io/conditions.header-action\"]}"
+	actual, err := NewManagedALBAnnotations(json)
+	assert.NoError(t, err)
+
+	rolloutsDemoAnnotation := actual["rollouts-demo"]
+	assert.NotNil(t, rolloutsDemoAnnotation)
+	assert.Equal(t, 3, len(rolloutsDemoAnnotation))
+}
+
+func TestALBHeaderBasedActionAnnotationKey(t *testing.T) {
+	r := &v1alpha1.Rollout{
+		Spec: v1alpha1.RolloutSpec{
+			Strategy: v1alpha1.RolloutStrategy{
+				Canary: &v1alpha1.CanaryStrategy{
+					TrafficRouting: &v1alpha1.RolloutTrafficRouting{
+						ALB: &v1alpha1.ALBTrafficRouting{
+							AnnotationPrefix: "alb.ingress.kubernetes.io",
+						},
+					},
+				},
+			},
+		},
+	}
+	assert.Equal(t, "alb.ingress.kubernetes.io/actions.route", ALBHeaderBasedActionAnnotationKey(r, "route"))
+}
+
+func TestALBHeaderBasedConditionAnnotationKey(t *testing.T) {
+	r := &v1alpha1.Rollout{
+		Spec: v1alpha1.RolloutSpec{
+			Strategy: v1alpha1.RolloutStrategy{
+				Canary: &v1alpha1.CanaryStrategy{
+					TrafficRouting: &v1alpha1.RolloutTrafficRouting{
+						ALB: &v1alpha1.ALBTrafficRouting{
+							AnnotationPrefix: "alb.ingress.kubernetes.io",
+						},
+					},
+				},
+			},
+		},
+	}
+	assert.Equal(t, "alb.ingress.kubernetes.io/conditions.route", ALBHeaderBasedConditionAnnotationKey(r, "route"))
 }

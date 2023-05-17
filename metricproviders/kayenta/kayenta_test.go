@@ -3,7 +3,7 @@ package kayenta
 import (
 	"bytes"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"testing"
 
@@ -19,35 +19,36 @@ func newAnalysisRun() *v1alpha1.AnalysisRun {
 
 /*
 spec:
-  inputs:
-  - name: start-time #2019-03-29T01:08:34Z
-  - name: end-time   #2019-03-29T01:38:34Z
-  - name: stable-hash  #xxxx
-  - name: canary-hash  #yyyy
-  metrics:
-  - name: mann-whitney
-    kayenta:
-      address: https://kayenta.example.com
-      application: guestbook
-      canaryConfigName: my-test
-	  metricsAccountName: wavefront-prod
-      configurationAccountName: intuit-kayenta
-      storageAccountName:  intuit-kayenta
-      thresholds:
-        pass: 90
-        marginal: 75
-      scopes:
-      - name: default
-        controlScope:
-          scope: app=guestbook and rollouts-pod-template-hash={{inputs.stable-hash}}
-          step: 60
-          start: "{{inputs.start-time}}"
-          end: "{{inputs.end-time}}"
-        experimentScope:
-          scope: app=guestbook and rollouts-pod-template-hash={{inputs.canary-hash}}
-          step: 60
-          start: "{{inputs.start-time}}"
-          end: "{{inputs.end-time}}"
+
+	  inputs:
+	  - name: start-time #2019-03-29T01:08:34Z
+	  - name: end-time   #2019-03-29T01:38:34Z
+	  - name: stable-hash  #xxxx
+	  - name: canary-hash  #yyyy
+	  metrics:
+	  - name: mann-whitney
+	    kayenta:
+	      address: https://kayenta.example.com
+	      application: guestbook
+	      canaryConfigName: my-test
+		  metricsAccountName: wavefront-prod
+	      configurationAccountName: intuit-kayenta
+	      storageAccountName:  intuit-kayenta
+	      thresholds:
+	        pass: 90
+	        marginal: 75
+	      scopes:
+	      - name: default
+	        controlScope:
+	          scope: app=guestbook and rollouts-pod-template-hash={{inputs.stable-hash}}
+	          step: 60
+	          start: "{{inputs.start-time}}"
+	          end: "{{inputs.end-time}}"
+	        experimentScope:
+	          scope: app=guestbook and rollouts-pod-template-hash={{inputs.canary-hash}}
+	          step: 60
+	          start: "{{inputs.start-time}}"
+	          end: "{{inputs.end-time}}"
 */
 func buildMetric() v1alpha1.Metric {
 	return v1alpha1.Metric{
@@ -152,7 +153,7 @@ func TestRunSuccessfully(t *testing.T) {
 	c := NewTestClient(func(req *http.Request) *http.Response {
 		if req.URL.String() == jobURL {
 			assert.Equal(t, req.URL.String(), jobURL)
-			body, err := ioutil.ReadAll(req.Body)
+			body, err := io.ReadAll(req.Body)
 			if err != nil {
 				panic(err)
 			}
@@ -170,7 +171,7 @@ func TestRunSuccessfully(t *testing.T) {
 			return &http.Response{
 				StatusCode: 200,
 				// Send response to be tested
-				Body: ioutil.NopCloser(bytes.NewBufferString(`
+				Body: io.NopCloser(bytes.NewBufferString(`
 			{
 				"canaryExecutionId" : "01DS50WVHAWSTAQACJKB1VKDQB"
             }
@@ -185,7 +186,7 @@ func TestRunSuccessfully(t *testing.T) {
 			return &http.Response{
 				StatusCode: 200,
 				// Send response to be tested
-				Body: ioutil.NopCloser(bytes.NewBufferString(configIdLookupResponse)),
+				Body: io.NopCloser(bytes.NewBufferString(configIdLookupResponse)),
 				// Must be set to non-nil value or it panics
 				Header: make(http.Header),
 			}
@@ -234,11 +235,11 @@ func TestRunBadJobResponse(t *testing.T) {
 			return &http.Response{
 				StatusCode: 500,
 				// Send response to be tested
-				//	Body: ioutil.NopCloser(bytes.NewBufferString(`
-				//{
+				//	Body: io.NopCloser(bytes.NewBufferString(`
+				// {
 				//	"canaryExecutionId" : "01DS50WVHAWSTAQACJKB1VKDQB"
-				//}
-				//`)),
+				// }
+				// `)),
 				// Must be set to non-nil value or it panics
 				Header: make(http.Header),
 			}
@@ -249,7 +250,7 @@ func TestRunBadJobResponse(t *testing.T) {
 			return &http.Response{
 				StatusCode: 200,
 				// Send response to be tested
-				Body: ioutil.NopCloser(bytes.NewBufferString(configIdLookupResponse)),
+				Body: io.NopCloser(bytes.NewBufferString(configIdLookupResponse)),
 				// Must be set to non-nil value or it panics
 				Header: make(http.Header),
 			}
@@ -286,7 +287,7 @@ func TestRunBadLookupResponse(t *testing.T) {
 		if req.URL.String() == jobURL {
 			assert.Equal(t, req.URL.String(), jobURL)
 
-			body, _ := ioutil.ReadAll(req.Body)
+			body, _ := io.ReadAll(req.Body)
 			assert.Equal(t, string(body), `
 							{
 								"scopes": {
@@ -301,11 +302,11 @@ func TestRunBadLookupResponse(t *testing.T) {
 			return &http.Response{
 				StatusCode: 500,
 				// Send response to be tested
-				//	Body: ioutil.NopCloser(bytes.NewBufferString(`
-				//{
+				//	Body: io.NopCloser(bytes.NewBufferString(`
+				// {
 				//	"canaryExecutionId" : "01DS50WVHAWSTAQACJKB1VKDQB"
-				//}
-				//`)),
+				// }
+				// `)),
 				// Must be set to non-nil value or it panics
 				Header: make(http.Header),
 			}
@@ -316,7 +317,7 @@ func TestRunBadLookupResponse(t *testing.T) {
 			return &http.Response{
 				StatusCode: 500,
 				// Send response to be tested
-				//Body: ioutil.NopCloser(bytes.NewBufferString(configIdLookupResponse)),
+				// Body: io.NopCloser(bytes.NewBufferString(configIdLookupResponse)),
 				// Must be set to non-nil value or it panics
 				Header: make(http.Header),
 			}
@@ -351,7 +352,7 @@ func TestRunInvalidLookupResponse(t *testing.T) {
 		if req.URL.String() == jobURL {
 			assert.Equal(t, req.URL.String(), jobURL)
 
-			body, _ := ioutil.ReadAll(req.Body)
+			body, _ := io.ReadAll(req.Body)
 			assert.Equal(t, string(body), `
 							{
 								"scopes": {
@@ -366,11 +367,11 @@ func TestRunInvalidLookupResponse(t *testing.T) {
 			return &http.Response{
 				StatusCode: 500,
 				// Send response to be tested
-				//	Body: ioutil.NopCloser(bytes.NewBufferString(`
-				//{
+				//	Body: io.NopCloser(bytes.NewBufferString(`
+				// {
 				//	"canaryExecutionId" : "01DS50WVHAWSTAQACJKB1VKDQB"
-				//}
-				//`)),
+				// }
+				// `)),
 				// Must be set to non-nil value or it panics
 				Header: make(http.Header),
 			}
@@ -381,7 +382,7 @@ func TestRunInvalidLookupResponse(t *testing.T) {
 			return &http.Response{
 				StatusCode: 200,
 				// Send response to be tested
-				Body: ioutil.NopCloser(bytes.NewBufferString(`{"this is bad": "yee"}`)),
+				Body: io.NopCloser(bytes.NewBufferString(`{"this is bad": "yee"}`)),
 				// Must be set to non-nil value or it panics
 				Header: make(http.Header),
 			}
@@ -418,7 +419,7 @@ func TestRunEmptyExecutionId(t *testing.T) {
 			return &http.Response{
 				StatusCode: 200,
 				// Send response to be tested
-				Body: ioutil.NopCloser(bytes.NewBufferString(`
+				Body: io.NopCloser(bytes.NewBufferString(`
 			{
 				"canaryExecutionId" : ""
             }
@@ -433,7 +434,7 @@ func TestRunEmptyExecutionId(t *testing.T) {
 			return &http.Response{
 				StatusCode: 200,
 				// Send response to be tested
-				Body: ioutil.NopCloser(bytes.NewBufferString(configIdLookupResponse)),
+				Body: io.NopCloser(bytes.NewBufferString(configIdLookupResponse)),
 				// Must be set to non-nil value or it panics
 				Header: make(http.Header),
 			}
@@ -470,8 +471,8 @@ func TestResumeSuccessfully(t *testing.T) {
 
 		return &http.Response{
 			StatusCode: 200,
-			//result.judgeResult.score.score
-			Body: ioutil.NopCloser(bytes.NewBufferString(`
+			// result.judgeResult.score.score
+			Body: io.NopCloser(bytes.NewBufferString(`
 			{
 				"complete" : true,
 				"result" : {
@@ -539,8 +540,8 @@ func TestResumeMissingScore(t *testing.T) {
 
 		return &http.Response{
 			StatusCode: 200,
-			//result.judgeResult.score.score
-			Body: ioutil.NopCloser(bytes.NewBufferString(`
+			// result.judgeResult.score.score
+			Body: io.NopCloser(bytes.NewBufferString(`
 			{
 				"complete" : true,
 				"result" : {
@@ -577,8 +578,8 @@ func TestResumeFailure(t *testing.T) {
 
 		return &http.Response{
 			StatusCode: 200,
-			//result.judgeResult.score.score
-			Body: ioutil.NopCloser(bytes.NewBufferString(`
+			// result.judgeResult.score.score
+			Body: io.NopCloser(bytes.NewBufferString(`
 			{
 				"complete" : true,
 				"result" : {
@@ -616,8 +617,8 @@ func TestResumeInconclusive(t *testing.T) {
 
 		return &http.Response{
 			StatusCode: 200,
-			//result.judgeResult.score.score
-			Body: ioutil.NopCloser(bytes.NewBufferString(`
+			// result.judgeResult.score.score
+			Body: io.NopCloser(bytes.NewBufferString(`
 			{
 				"complete" : true,
 				"result" : {
@@ -655,8 +656,8 @@ func TestResumeIncompleteStatus(t *testing.T) {
 
 		return &http.Response{
 			StatusCode: 200,
-			//result.judgeResult.score.score
-			Body: ioutil.NopCloser(bytes.NewBufferString(`
+			// result.judgeResult.score.score
+			Body: io.NopCloser(bytes.NewBufferString(`
 			{
 				"complete" : false,
 				"result" : {
@@ -695,8 +696,8 @@ func TestResumeMissingCompleteStatus(t *testing.T) {
 
 		return &http.Response{
 			StatusCode: 200,
-			//result.judgeResult.score.score
-			Body: ioutil.NopCloser(bytes.NewBufferString(`
+			// result.judgeResult.score.score
+			Body: io.NopCloser(bytes.NewBufferString(`
 			{
 				"result" : {
 								"judgeResult": {
@@ -731,7 +732,7 @@ func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req), nil
 }
 
-//NewTestClient returns *http.Client with Transport replaced to avoid making real calls
+// NewTestClient returns *http.Client with Transport replaced to avoid making real calls
 func NewTestClient(fn RoundTripFunc) http.Client {
 	return http.Client{
 		Transport: fn,

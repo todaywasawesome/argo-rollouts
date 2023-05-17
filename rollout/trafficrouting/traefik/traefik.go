@@ -6,15 +6,15 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
-
-	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
-	"github.com/argoproj/argo-rollouts/utils/defaults"
-	"github.com/argoproj/argo-rollouts/utils/record"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+
+	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
+	"github.com/argoproj/argo-rollouts/utils/defaults"
+	"github.com/argoproj/argo-rollouts/utils/record"
 )
 
 // Type holds this controller type
@@ -156,10 +156,22 @@ func getService(serviceName string, services []interface{}) (map[string]interfac
 	return selectedService, nil
 }
 
+func (r *Reconciler) SetHeaderRoute(headerRouting *v1alpha1.SetHeaderRoute) error {
+	return nil
+}
+
 func (r *Reconciler) VerifyWeight(desiredWeight int32, additionalDestinations ...v1alpha1.WeightDestination) (*bool, error) {
 	return nil, nil
 }
 
 func (r *Reconciler) Type() string {
 	return Type
+}
+
+func (r *Reconciler) SetMirrorRoute(setMirrorRoute *v1alpha1.SetMirrorRoute) error {
+	return nil
+}
+
+func (r *Reconciler) RemoveManagedRoutes() error {
+	return nil
 }

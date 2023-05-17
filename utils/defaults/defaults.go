@@ -1,7 +1,6 @@
 package defaults
 
 import (
-	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
@@ -42,6 +41,15 @@ const (
 	DefaultBurst int = 80
 	// DefaultAwsLoadBalancerPageSize is the default page size used when calling aws to get load balancers by DNS name
 	DefaultAwsLoadBalancerPageSize = int32(300)
+	// DefaultMetricCleanupDelay is the default time to delay metrics removal upon object removal, gives time for metrics
+	// to be collected
+	DefaultMetricCleanupDelay = int32(65)
+	// DefaultRolloutsConfigMapName is the default name of the ConfigMap that contains the Rollouts controller configuration
+	DefaultRolloutsConfigMapName = "argo-rollouts-config"
+	// DefaultRolloutPluginFolder is the default location where plugins will be downloaded and/or moved to.
+	DefaultRolloutPluginFolder = "plugin-bin"
+	// DefaultDescribeTagsLimit is the default number resources (ARNs) in a single call
+	DefaultDescribeTagsLimit int = 20
 )
 
 const (
@@ -53,6 +61,8 @@ const (
 	DefaultAppMeshCRDVersion            = "v1beta2"
 	DefaultTraefikAPIGroup              = "traefik.containo.us"
 	DefaultTraefikVersion               = "traefik.containo.us/v1alpha1"
+	DefaultApisixAPIGroup               = "apisix.apache.org"
+	DefaultApisixVersion                = "apisix.apache.org/v2"
 )
 
 var (
@@ -62,6 +72,8 @@ var (
 	smiAPIVersion                = DefaultSMITrafficSplitVersion
 	targetGroupBindingAPIVersion = DefaultTargetGroupBindingAPIVersion
 	appmeshCRDVersion            = DefaultAppMeshCRDVersion
+	defaultMetricCleanupDelay    = DefaultMetricCleanupDelay
+	defaultDescribeTagsLimit     = DefaultDescribeTagsLimit
 )
 
 const (
@@ -78,6 +90,14 @@ func init() {
 		if interval, err := strconv.ParseInt(rolloutVerifyInterval, 10, 32); err != nil {
 			rolloutVerifyRetryInterval = time.Duration(interval) * time.Second
 		}
+	}
+}
+
+func GetStringOrDefault(value, defaultValue string) string {
+	if value == "" {
+		return defaultValue
+	} else {
+		return value
 	}
 }
 
@@ -235,7 +255,7 @@ func Namespace() string {
 		return ns
 	}
 	// Fall back to the namespace associated with the service account token, if available
-	if data, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+	if data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
 		if ns := strings.TrimSpace(string(data)); len(ns) > 0 {
 			return ns
 		}
@@ -295,4 +315,24 @@ func GetTargetGroupBindingAPIVersion() string {
 
 func GetRolloutVerifyRetryInterval() time.Duration {
 	return rolloutVerifyRetryInterval
+}
+
+// GetMetricCleanupDelaySeconds returns the duration to delay the cleanup of metrics
+func GetMetricCleanupDelaySeconds() time.Duration {
+	return time.Duration(defaultMetricCleanupDelay) * time.Second
+}
+
+// SetMetricCleanupDelaySeconds sets the metric cleanup delay in seconds
+func SetMetricCleanupDelaySeconds(seconds int32) {
+	defaultMetricCleanupDelay = seconds
+}
+
+// GetDescribeTagsLimit returns limit of resources can be requested in a single call
+func GetDescribeTagsLimit() int {
+	return defaultDescribeTagsLimit
+}
+
+// SetDescribeTagsLimit sets the limit of resources can be requested in a single call
+func SetDescribeTagsLimit(limit int) {
+	defaultDescribeTagsLimit = limit
 }

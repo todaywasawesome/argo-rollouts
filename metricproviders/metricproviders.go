@@ -3,11 +3,16 @@ package metricproviders
 import (
 	"fmt"
 
+	"github.com/argoproj/argo-rollouts/metric"
+	"github.com/argoproj/argo-rollouts/metricproviders/influxdb"
+	"github.com/argoproj/argo-rollouts/metricproviders/skywalking"
+
 	"github.com/argoproj/argo-rollouts/metricproviders/cloudwatch"
 	"github.com/argoproj/argo-rollouts/metricproviders/datadog"
 	"github.com/argoproj/argo-rollouts/metricproviders/graphite"
 	"github.com/argoproj/argo-rollouts/metricproviders/kayenta"
 	"github.com/argoproj/argo-rollouts/metricproviders/newrelic"
+	"github.com/argoproj/argo-rollouts/metricproviders/plugin"
 	"github.com/argoproj/argo-rollouts/metricproviders/wavefront"
 	"github.com/argoproj/argo-rollouts/metricproviders/webmetric"
 
@@ -21,33 +26,15 @@ import (
 	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 )
 
-// Provider methods to query a external systems and generate a measurement
-type Provider interface {
-	// Run start a new external system call for a measurement
-	// Should be idempotent and do nothing if a call has already been started
-	Run(*v1alpha1.AnalysisRun, v1alpha1.Metric) v1alpha1.Measurement
-	// Checks if the external system call is finished and returns the current measurement
-	Resume(*v1alpha1.AnalysisRun, v1alpha1.Metric, v1alpha1.Measurement) v1alpha1.Measurement
-	// Terminate will terminate an in-progress measurement
-	Terminate(*v1alpha1.AnalysisRun, v1alpha1.Metric, v1alpha1.Measurement) v1alpha1.Measurement
-	// GarbageCollect is used to garbage collect completed measurements to the specified limit
-	GarbageCollect(*v1alpha1.AnalysisRun, v1alpha1.Metric, int) error
-	// Type gets the provider type
-	Type() string
-	// GetMetadata returns any additional metadata which providers need to store/display as part
-	// of the metric result. For example, Prometheus uses is to store the final resolved queries.
-	GetMetadata(metric v1alpha1.Metric) map[string]string
-}
-
 type ProviderFactory struct {
 	KubeClient kubernetes.Interface
 	JobLister  batchlisters.JobLister
 }
 
-type ProviderFactoryFunc func(logCtx log.Entry, metric v1alpha1.Metric) (Provider, error)
+type ProviderFactoryFunc func(logCtx log.Entry, metric v1alpha1.Metric) (metric.Provider, error)
 
 // NewProvider creates the correct provider based on the provider type of the Metric
-func (f *ProviderFactory) NewProvider(logCtx log.Entry, metric v1alpha1.Metric) (Provider, error) {
+func (f *ProviderFactory) NewProvider(logCtx log.Entry, metric v1alpha1.Metric) (metric.Provider, error) {
 	switch provider := Type(metric); provider {
 	case prometheus.ProviderType:
 		api, err := prometheus.NewPrometheusAPI(metric)
@@ -88,11 +75,29 @@ func (f *ProviderFactory) NewProvider(logCtx log.Entry, metric v1alpha1.Metric) 
 		}
 		return graphite.NewGraphiteProvider(client, logCtx), nil
 	case cloudwatch.ProviderType:
-		clinet, err := cloudwatch.NewCloudWatchAPIClient(metric)
+		client, err := cloudwatch.NewCloudWatchAPIClient(metric)
 		if err != nil {
 			return nil, err
 		}
-		return cloudwatch.NewCloudWatchProvider(clinet, logCtx), nil
+		return cloudwatch.NewCloudWatchProvider(client, logCtx), nil
+	case influxdb.ProviderType:
+		client, err := influxdb.NewInfluxdbAPI(metric, f.KubeClient)
+		if err != nil {
+			return nil, err
+		}
+		return influxdb.NewInfluxdbProvider(client, logCtx), nil
+	case skywalking.ProviderType:
+		client, err := skywalking.NewSkyWalkingClient(metric, f.KubeClient)
+		if err != nil {
+			return nil, err
+		}
+		return skywalking.NewSkyWalkingProvider(client, logCtx), nil
+	case plugin.ProviderType:
+		plugin, err := plugin.NewRpcPlugin(metric)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create plugin: %v", err)
+		}
+		return plugin, nil
 	default:
 		return nil, fmt.Errorf("no valid provider in metric '%s'", metric.Name)
 	}
@@ -115,6 +120,15 @@ func Type(metric v1alpha1.Metric) string {
 		return newrelic.ProviderType
 	} else if metric.Provider.CloudWatch != nil {
 		return cloudwatch.ProviderType
+	} else if metric.Provider.Graphite != nil {
+		return graphite.ProviderType
+	} else if metric.Provider.Influxdb != nil {
+		return influxdb.ProviderType
+	} else if metric.Provider.SkyWalking != nil {
+		return skywalking.ProviderType
+	} else if metric.Provider.Plugin != nil {
+		return plugin.ProviderType
 	}
+
 	return "Unknown Provider"
 }

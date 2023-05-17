@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/argoproj/pkg/kubeclientmetrics"
 	smiclientset "github.com/servicemeshinterface/smi-sdk-go/pkg/gen/client/split/clientset/versioned"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -32,7 +33,6 @@ import (
 	logutil "github.com/argoproj/argo-rollouts/utils/log"
 	"github.com/argoproj/argo-rollouts/utils/tolerantinformer"
 	"github.com/argoproj/argo-rollouts/utils/version"
-	"github.com/argoproj/pkg/kubeclientmetrics"
 )
 
 const (
@@ -83,11 +83,12 @@ func newCommand() *cobra.Command {
 			if logFormat != "" {
 				log.SetFormatter(createFormatter(logFormat))
 			}
+			logutil.SetKLogLogger(log.New())
 			logutil.SetKLogLevel(klogLevel)
 			log.WithField("version", version.GetVersion()).Info("Argo Rollouts starting")
 
 			// set up signals so we handle the first shutdown signal gracefully
-			stopCh := signals.SetupSignalHandler()
+			ctx := signals.SetupSignalHandlerContext()
 
 			defaults.SetVerifyTargetGroup(awsVerifyTargetGroup)
 			defaults.SetIstioAPIVersion(istioVersion)
@@ -106,6 +107,9 @@ func newCommand() *cobra.Command {
 				namespace = configNS
 				log.Infof("Using namespace %s", namespace)
 			}
+
+			k8sRequestProvider := &metrics.K8sRequestsCountProvider{}
+			kubeclientmetrics.AddMetricsTransportWrapper(config, k8sRequestProvider.IncKubernetesRequest)
 
 			kubeClient, err := kubernetes.NewForConfig(config)
 			checkError(err)
@@ -154,8 +158,6 @@ func newCommand() *cobra.Command {
 			configMapInformer := controllerNamespaceInformerFactory.Core().V1().ConfigMaps()
 			secretInformer := controllerNamespaceInformerFactory.Core().V1().Secrets()
 
-			k8sRequestProvider := &metrics.K8sRequestsCountProvider{}
-			kubeclientmetrics.AddMetricsTransportWrapper(config, k8sRequestProvider.IncKubernetesRequest)
 			mode, err := ingressutil.DetermineIngressMode(ingressVersion, kubeClient.DiscoveryClient)
 			checkError(err)
 			ingressWrapper, err := ingressutil.NewIngressWrapper(mode, kubeClient, kubeInformerFactory)
@@ -188,23 +190,16 @@ func newCommand() *cobra.Command {
 				healthzPort,
 				k8sRequestProvider,
 				nginxIngressClasses,
-				albIngressClasses)
-			// notice that there is no need to run Start methods in a separate goroutine. (i.e. go kubeInformerFactory.Start(stopCh)
-			// Start method is non-blocking and runs all registered informers in a dedicated goroutine.
-			dynamicInformerFactory.Start(stopCh)
-			if !namespaced {
-				clusterDynamicInformerFactory.Start(stopCh)
-			}
-			kubeInformerFactory.Start(stopCh)
-			controllerNamespaceInformerFactory.Start(stopCh)
-			jobInformerFactory.Start(stopCh)
+				albIngressClasses,
+				dynamicInformerFactory,
+				clusterDynamicInformerFactory,
+				istioDynamicInformerFactory,
+				namespaced,
+				kubeInformerFactory,
+				controllerNamespaceInformerFactory,
+				jobInformerFactory)
 
-			// Check if Istio installed on cluster before starting dynamicInformerFactory
-			if istioutil.DoesIstioExist(istioPrimaryDynamicClient, namespace) {
-				istioDynamicInformerFactory.Start(stopCh)
-			}
-
-			if err = cm.Run(rolloutThreads, serviceThreads, ingressThreads, experimentThreads, analysisThreads, electOpts, stopCh); err != nil {
+			if err = cm.Run(ctx, rolloutThreads, serviceThreads, ingressThreads, experimentThreads, analysisThreads, electOpts); err != nil {
 				log.Fatalf("Error running controller: %s", err.Error())
 			}
 			return nil
